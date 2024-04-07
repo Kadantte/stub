@@ -1,6 +1,10 @@
 import ms from 'ms';
+import { customAlphabet } from 'nanoid';
+import { NextRouter } from 'next/router';
 
-import { ccTLDs } from './constants';
+import { ccTLDs, secondLevelDomains, SPECIAL_APEX_DOMAINS } from './constants';
+
+export const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 7);
 
 interface SWRError extends Error {
   status: number;
@@ -54,7 +58,10 @@ export function linkConstructor({ key, domain, pretty }: { key: string; domain: 
 export const getMetadataFromUrl = async (url: string) => {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 2000); // timeout if it takes longer than 2 seconds
-  const title = await fetch(url, { signal: controller.signal })
+  const title = await fetch(url, {
+    headers: { 'User-Agent': `StubMetaInspector/${process.env.npm_package_version} (+https://github.com/Snazzah/stub)` },
+    signal: controller.signal
+  })
     .then((res) => {
       clearTimeout(timeoutId);
       return res.text();
@@ -84,9 +91,14 @@ export const getMetadataFromUrl = async (url: string) => {
   return title;
 };
 
-export const timeAgo = (timestamp: number): string => {
+export const timeAgo = (timestamp: Date, timeOnly?: boolean): string => {
   if (!timestamp) return 'never';
-  return `${ms(Date.now() - timestamp)} ago`;
+  return `${ms(Date.now() - new Date(timestamp).getTime())}${timeOnly ? '' : ' ago'}`;
+};
+
+export const getDateTimeLocal = (timestamp?: Date): string => {
+  const d = timestamp ? new Date(timestamp) : new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().split(':').slice(0, 2).join(':');
 };
 
 export const generateSlugFromName = (name: string) => {
@@ -94,12 +106,13 @@ export const generateSlugFromName = (name: string) => {
   if (normalizedName.length < 3) {
     return '';
   }
-  if (ccTLDs.some((tld) => normalizedName.endsWith(tld))) {
+
+  if (ccTLDs.has(normalizedName.slice(-2))) {
     return `${normalizedName.slice(0, -2)}.${normalizedName.slice(-2)}`;
   }
   // remove vowels
   const devowel = normalizedName.replace(/[aeiou]/g, '');
-  if (devowel.length >= 3 && ccTLDs.some((tld) => devowel.endsWith(tld))) {
+  if (devowel.length >= 3 && ccTLDs.has(devowel.slice(-2))) {
     return `${devowel.slice(0, -2)}.${devowel.slice(-2)}`;
   }
 
@@ -108,7 +121,7 @@ export const generateSlugFromName = (name: string) => {
     .map((word) => word[0])
     .join('');
 
-  if (acronym.length >= 3 && ccTLDs.some((tld) => acronym.endsWith(tld))) {
+  if (acronym.length >= 3 && ccTLDs.has(acronym.slice(-2))) {
     return `${acronym.slice(0, -2)}.${acronym.slice(-2)}`;
   }
 
@@ -116,6 +129,75 @@ export const generateSlugFromName = (name: string) => {
 
   return `${shortestString}.sh`;
 };
+
+export const getApexDomain = (url: string) => {
+  let domain: string;
+  try {
+    domain = new URL(url).hostname;
+  } catch (e) {
+    return '';
+  }
+
+  // special apex domains (e.g. youtu.be)
+  if (SPECIAL_APEX_DOMAINS[domain]) return SPECIAL_APEX_DOMAINS[domain];
+
+  const parts = domain.split('.');
+  if (parts.length > 2) {
+    // if this is a second-level TLD (e.g. co.uk, .com.ua, .org.tt), we need to return the last 3 parts
+    if (secondLevelDomains.has(parts[parts.length - 2]) && ccTLDs.has(parts[parts.length - 1])) {
+      return parts.slice(-3).join('.');
+    }
+    // otherwise, it's a subdomain (e.g. dub.vercel.app), so we return the last 2 parts
+    return parts.slice(-2).join('.');
+  }
+  // if it's a normal domain (e.g. dub.sh), we return the domain
+  return domain;
+};
+
+export const getParamsFromURL = (url: string) => {
+  if (!url) return {};
+  try {
+    const params = new URL(url).searchParams;
+    const paramsObj: Record<string, string> = {};
+    for (const [key, value] of params.entries()) {
+      if (value && value !== '') {
+        paramsObj[key] = value;
+      }
+    }
+    return paramsObj;
+  } catch (e) {
+    return {};
+  }
+};
+
+export const constructURLFromUTMParams = (url: string, utmParams: Record<string, string>) => {
+  if (!url) return '';
+  try {
+    const params = new URL(url).searchParams;
+    for (const [key, value] of Object.entries(utmParams)) {
+      if (value === '') {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    }
+    return `${url.split('?')[0]}${params.toString() ? `?${params.toString()}` : ''}`;
+  } catch (e) {
+    return '';
+  }
+};
+
+export const getQueryString = (router: NextRouter) => {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { slug: _, ...queryWithoutSlug } = router.query as {
+    slug: string;
+    [key: string]: string;
+  };
+  const queryString = new URLSearchParams(queryWithoutSlug).toString();
+  return `${queryString ? '?' : ''}${queryString}`;
+};
+
+export const getFaviconFromDomain = (domain: string) => `https://www.google.com/s2/favicons?sz=64&domain_url=${domain}`;
 
 export const validDomainRegex = new RegExp('^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?.)+[a-z0-9][a-z0-9-]{0,61}[a-z0-9]$');
 
@@ -136,7 +218,9 @@ export function flattenErrors(errors: any, keyPrefix = '') {
   let messages: string[] = [];
   for (const fieldName in errors) {
     if (!(fieldName in errors) || fieldName === 'message') continue;
-    if (errors[fieldName]._errors) {
+    if (fieldName === '_errors') {
+      messages = messages.concat(errors[fieldName].map((obj) => `${keyPrefix}: ${obj.message || obj}`));
+    } else if (errors[fieldName]._errors) {
       messages = messages.concat(errors[fieldName]._errors.map((obj) => `${keyPrefix + fieldName}: ${obj.message || obj}`));
     } else if (Array.isArray(errors[fieldName])) {
       messages = messages.concat(errors[fieldName].map((str) => `${keyPrefix + fieldName}: ${str}`));

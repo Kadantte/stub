@@ -9,6 +9,12 @@ import { nFormatter } from '@/lib/utils';
 import ChartIllustration from '../shared/illustrations/chart';
 import DeviceIcon from './device-icon';
 
+const nameDisplayMap: { [name: string]: string } = {
+  smarttv: 'Smart TV',
+  UCBrowser: 'UC Browser',
+  Mint: 'Linux Mint'
+};
+
 export default function Devices({ data: rawData }: { data: StatsProps }) {
   const [tab, setTab] = useState<DeviceTabs>('device');
   const [showBots, setShowBots] = useState(false); // hide bots by default
@@ -34,8 +40,8 @@ export default function Devices({ data: rawData }: { data: StatsProps }) {
   };
 
   return (
-    <div className="flex flex-col justify-between bg-white pt-5 shadow-lg rounded-lg border border-gray-100 h-[420px]">
-      <div className="relative overflow-scroll scrollbar-hide px-7" onScroll={handleScroll}>
+    <div className="flex flex-col justify-between bg-white pt-5 sm:shadow-lg sm:rounded-lg border border-gray-200 sm:border-gray-100 h-[420px]">
+      <div className="relative h-full overflow-scroll scrollbar-hide px-7" onScroll={handleScroll}>
         <div className="mb-3 flex justify-between">
           <h1 className="text-xl font-semibold">Devices</h1>
           <BadgeSelect
@@ -54,7 +60,7 @@ export default function Devices({ data: rawData }: { data: StatsProps }) {
                     <div className="relative flex items-center z-10 w-full max-w-[calc(100%-3rem)]">
                       <span className="flex gap-2 px-2 items-center z-10">
                         <DeviceIcon display={display} tab={tab} className="w-5 h-5 object-contain" />
-                        <p className={`text-gray-800 text-sm ${display !== 'iOS' ? 'capitalize' : ''}`}>{display}</p>
+                        <p className={`text-gray-800 text-sm ${display !== 'iOS' ? 'capitalize' : ''}`}>{nameDisplayMap[display] || display}</p>
                       </span>
                       <motion.div
                         style={{

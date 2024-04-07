@@ -1,47 +1,67 @@
-import Link from 'next/link';
-import { NextRouter, useRouter } from 'next/router';
-import { useMemo } from 'react';
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { useMemo } from "react";
 
-const TabsHelper = (router: NextRouter): { name: string; href: string }[] => {
-  const { slug, key } = router.query as {
-    slug?: string;
-    key?: string;
-  };
+const TabsHelper = (router) => {
+  const { slug, key, id } = router.query;
+
   if (key) {
     return [{ name: '← All Links', href: `/p/${slug}` }];
-  } else if (slug) {
+  }
+
+  else if (slug) {
     return [
       { name: 'Links', href: `/p/${slug}` },
-      { name: 'Project Settings', href: `/p/${slug}/settings` }
+      { name: 'Settings', href: `/p/${slug}/settings` },
+      { name: 'Analytics', href: `/p/${slug}/analytics` },
     ];
-  } else if (router.pathname.startsWith('/admin'))
+  }
+
+  else if (router.pathname.startsWith('/admin/users/') && id) {
+    return [
+      { name: '← Users', href: `/admin/users` },
+      { name: 'Profile', href: `/admin/users/${id}` },
+    ];
+  }
+
+  else if (router.pathname.startsWith('/admin')) {
     return [
       { name: '← Projects', href: `/` },
-      { name: 'App Settings', href: `/admin` }
+      { name: 'Instance Settings', href: `/admin` },
+      { name: 'Users', href: `/admin/users` },
     ];
+  }
+
   return [{ name: 'Projects', href: `/` }];
+};
+
+const isActiveTab = (currentPath, tabHref) => {
+  return currentPath === tabHref;
 };
 
 export default function NavTabs() {
   const router = useRouter();
   const tabs = useMemo(() => {
-    if (!router.isReady) {
-      return [];
-    } else {
-      return TabsHelper(router);
-    }
-  }, [router.query]);
+    if (!router.isReady) return [];
+    return TabsHelper(router);
+  }, [router]);
+
+  const currentPath = router.asPath.split("?")[0]; 
 
   return (
-    <div className="flex justify-start space-x-8 items-center h-12 -mb-0.5">
+    <div className="flex justify-start space-x-2 items-center h-12 -mb-0.5">
       {tabs.map(({ name, href }) => (
         <Link key={href} href={href}>
           <a
-            className={`px-1 py-3 border-b-2 ${
-              router.asPath === href ? 'border-black font-semibold' : 'border-transparent text-gray-700 hover:text-black'
-            } transition-all`}
+            className={`border-b-2 p-1 ${
+              isActiveTab(currentPath, href)
+                ? "border-black text-black"
+                : "border-transparent text-gray-600 hover:text-black"
+            }`}
           >
-            <p className="text-sm active:scale-95 transition-all duration-75">{name}</p>
+            <div className="rounded-md px-3 py-2 hover:bg-gray-100 active:bg-gray-200 transition-all duration-75">
+              <p className="text-sm">{name}</p>
+            </div>
           </a>
         </Link>
       ))}

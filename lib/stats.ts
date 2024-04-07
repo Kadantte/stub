@@ -21,9 +21,10 @@ export interface StatsProps {
     region: string;
   }[];
   deviceData: { device: string; browser: string; os: string; bot: string }[];
+  refererData: { domain: string }[];
 }
 
-export type IntervalProps = '1h' | '24h' | '7d' | '30d';
+export type IntervalProps = '1h' | '24h' | '7d' | '30d' | '90d';
 
 export const intervalData = {
   '1h': {
@@ -62,6 +63,16 @@ export const intervalData = {
   '30d': {
     milliseconds: 2592000000,
     intervals: 30,
+    coefficient: 86400000,
+    format: (e: number) =>
+      new Date(e).toLocaleDateString('en-us', {
+        month: 'short',
+        day: 'numeric'
+      })
+  },
+  '90d': {
+    milliseconds: 7776000000,
+    intervals: 90,
     coefficient: 86400000,
     format: (e: number) =>
       new Date(e).toLocaleDateString('en-us', {
@@ -121,13 +132,23 @@ export function processData(
     };
   });
 
+  const refererData = data.map(({ referer }) => {
+    try {
+      const url = referer ? new URL(referer) : null;
+      return { domain: url?.hostname || '(direct)' };
+    } catch (e) {
+      return { domain: '(invalid)' };
+    }
+  });
+
   return {
     key,
     interval: interval || '24h',
     totalClicks: data.length,
     clicksData,
     locationData,
-    deviceData
+    deviceData,
+    refererData
   };
 }
 
@@ -197,6 +218,30 @@ export const processDeviceData = (data: StatsProps['deviceData'], tab: DeviceTab
     .sort((a, b) => b.count - a.count);
 };
 
+export interface RefererStatsProps {
+  display: string;
+  count: number;
+}
+
+export const processRefererData = (data: StatsProps['refererData']): RefererStatsProps[] => {
+  const results =
+    data && data.length > 0
+      ? data.reduce<Record<string, number>>((acc, d) => {
+          const currentVal = d.domain;
+          const count = acc[currentVal] || 0;
+          acc[currentVal] = count + 1;
+          return acc;
+        }, {})
+      : {};
+
+  return Object.entries(results)
+    .map(([display, count]) => ({
+      display,
+      count
+    }))
+    .sort((a, b) => b.count - a.count);
+};
+
 export const dummyData: StatsProps = {
   key: 'test',
   interval: '24h',
@@ -208,10 +253,13 @@ export const dummyData: StatsProps = {
   // @ts-ignore
   locationData: null,
   // @ts-ignore
-  deviceData: null
+  deviceData: null,
+  // @ts-ignore
+  refererData: null
 };
 
 export const handleDeviceEdgeCases = (ua: string): string => {
+  if (!ua) return 'Unknown';
   if (ua.includes('curl')) {
     return 'Curl Request';
   } else if (ua.includes('Wget')) {
@@ -242,6 +290,20 @@ export const handleDeviceEdgeCases = (ua: string): string => {
     return 'Yandex Bot';
   } else if (ua.includes('DuckDuckBot')) {
     return 'DuckDuckGo Bot';
+  } else if (ua.includes('MetaInspector')) {
+    return 'MetaTags Bot';
+  } else if (ua.includes('CensysInspect')) {
+    return 'Censys Bot';
+  } else if (ua.includes('CheckMarkNetwork')) {
+    return 'CheckMarkNetwork Bot';
+  } else if (ua.includes('python-requests') || ua.includes('aiohttp')) {
+    return 'Python Request';
+  } else if (ua.includes('Apache-HttpClient')) {
+    return 'Java Request';
+  } else if (ua.includes('sindresorhus/got') || ua.includes('axios')) {
+    return 'Node.js Request';
+  } else if (ua.includes('Go-http-client')) {
+    return 'Go Request';
   } else {
     return 'Unknown';
   }

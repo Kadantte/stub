@@ -1,11 +1,12 @@
+import cookie from 'cookie';
 import { IncomingMessage, ServerResponse } from 'http';
 import Redis from 'ioredis';
 
-import type { LinkProps } from '@/lib/types';
-
+import { hasPasswordCookie, passwordValid, validPasswordCookie } from './decrypt';
 import { getGeo } from './geoip';
+import { getEmbedHTML, getPasswordPageHTML } from './html';
 import { userAgentFromString } from './ua';
-import { parseUrl, serverRedirect } from './util';
+import { detectBot, parseUrl, serverRedirect } from './util';
 
 const redis = new Redis({
   host: process.env.REDIS_HOST,
@@ -14,14 +15,11 @@ const redis = new Redis({
   password: process.env.REDIS_PASSWORD
 });
 
-/**
- * Recording clicks with geo, ua, referer and timestamp data
- * If key is not specified, record click as the root click
- **/
-export async function recordClick(hostname: string, req: IncomingMessage, ip: string, key?: string) {
+/** Recording clicks with geo, ua, referer and timestamp data **/
+export async function recordClick(hostname: string, req: IncomingMessage, ip: string, key: string) {
   const now = Date.now();
   return await redis.zadd(
-    key ? `${hostname}:clicks:${key}` : `${hostname}:root:clicks`,
+    `${hostname}:clicks:${key}`,
     'NX',
     now,
     JSON.stringify({
@@ -33,33 +31,8 @@ export async function recordClick(hostname: string, req: IncomingMessage, ip: st
   );
 }
 
-interface Cooldown {
-  uses: number;
-  expires: number;
-}
-
-interface CooldownResponse {
-  ok: boolean;
-  cooldown: Cooldown;
-  expiry: number;
-}
-
-export async function processCooldown(key: string, ms: number, uses: number): Promise<CooldownResponse> {
-  const currentTime = Date.now();
-  const cooldownString = await redis.get(key);
-  const cooldown: Cooldown = cooldownString ? JSON.parse(cooldownString) : { uses, expires: currentTime + ms };
-  const expiry = cooldown.expires - currentTime;
-  if (cooldown.uses <= 0 && currentTime < cooldown.expires) return { ok: false, cooldown, expiry };
-  cooldown.uses--;
-  if (Math.round(expiry) > 0) await redis.set(key, JSON.stringify(cooldown), 'PX', Math.round(expiry));
-  return { ok: true, cooldown, expiry };
-}
-
-const RATELIMIT_USES = 10;
-const RATELIMIT_EXPIRY = 60000;
-
 export default async function handleLink(req: IncomingMessage, res: ServerResponse) {
-  const { hostname, key: linkKey } = parseUrl(req);
+  const { hostname, key: linkKey, query } = parseUrl(req);
 
   const key = linkKey || ':index';
   if (!hostname) return false;
@@ -67,36 +40,58 @@ export default async function handleLink(req: IncomingMessage, res: ServerRespon
   // Get the IP
   let ip = req.socket.remoteAddress ?? '127.0.0.1';
   if (process.env.TRUST_PROXY === 'true') {
-    const proxyHeader = process.env.TRUST_PROXY_HEADER ?? 'cf-connecting-ip';
+    const proxyHeader = process.env.TRUST_PROXY_HEADER || 'cf-connecting-ip';
     if (proxyHeader && req.headers[proxyHeader])
       ip = Array.isArray(req.headers[proxyHeader]) ? req.headers[proxyHeader][0] : (req.headers[proxyHeader] as string);
   }
 
-  const cooldown = await processCooldown(`stub_${ip}`, RATELIMIT_EXPIRY, RATELIMIT_USES);
+  const response = await redis.get(`${hostname}:${key}`).then((r) => {
+    if (r !== null)
+      return JSON.parse(r) as {
+        url: string;
+        password?: boolean;
+        proxy?: boolean;
+      };
+    return null;
+  });
+  const target = response?.url;
 
-  if (cooldown.ok) {
-    // if ratelimit is not exceeded
-    const response = await redis.hget(`${hostname}:links`, key).then((r) => {
-      if (r !== null) return JSON.parse(r) as Omit<LinkProps, 'key'>;
-      return null;
-    });
-    const target = response?.url;
-
-    if (target) {
-      serverRedirect(res, target);
-      await recordClick(hostname, req, ip, key);
+  if (target) {
+    const isBot = detectBot(req);
+    if (response.password) {
+      if (await validPasswordCookie(req, hostname, key)) serverRedirect(res, target);
+      else if (query.password !== '' && typeof query.password === 'string' && (await passwordValid(hostname, key, query.password))) {
+        res.setHeader(
+          'Set-Cookie',
+          cookie.serialize('stub_link_password', query.password, {
+            path: `/${encodeURIComponent(key)}`,
+            expires: new Date(Date.now() + 604800000)
+          })
+        );
+        serverRedirect(res, target);
+      } else {
+        res.statusCode = 200;
+        if (hasPasswordCookie(req))
+          res.setHeader(
+            'Set-Cookie',
+            cookie.serialize('stub_link_password', '', {
+              path: `/${encodeURIComponent(key)}`,
+              expires: new Date(1)
+            })
+          );
+        res.end(getPasswordPageHTML(typeof query.password === 'string' ? query.password : undefined));
+      }
+    } else if (response.proxy && isBot) {
+      res.statusCode = 200;
+      res.end(await getEmbedHTML(res, hostname, key));
     } else {
-      // TODO allow for 404 links
-      res.statusCode = 404;
-      res.end('Not Found');
+      serverRedirect(res, target);
     }
+    await recordClick(hostname, req, ip, key);
   } else {
-    res
-      .setHeader('X-RateLimit-Limit', RATELIMIT_USES)
-      .setHeader('X-RateLimit-Remaining', cooldown.cooldown.uses)
-      .setHeader('X-RateLimit-Reset', Math.ceil(cooldown.cooldown.expires / 1000));
-    res.statusCode = 429;
-    res.end('You are requesting a bit too often, try again later.');
+    // TODO allow for 404 links
+    res.statusCode = 404;
+    res.end('Not Found');
   }
   return true;
 }

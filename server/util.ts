@@ -5,7 +5,7 @@ export function parseUrl(req: IncomingMessage) {
   const hostname = req.headers['host'];
   const parsedUrl = parse(req.url, true);
   const { pathname, query } = parsedUrl;
-  const key = pathname.slice(1);
+  const key = decodeURIComponent(pathname.slice(1));
   return {
     hostname,
     path: pathname,
@@ -24,8 +24,12 @@ export function serverRedirect(res: ServerResponse, location: string, status = 3
 export const detectBot = (req: IncomingMessage) => {
   const ua = req.headers['user-agent'];
   if (ua) {
-    // Note: MetaInspector is for https://metatags.io/
-    return /bot|google|baidu|bing|msn|duckduckbot|teoma|slurp|yandex|MetaInspector/i.test(ua);
+    /* Note:
+     * - bot is for most bots & crawlers
+     * - facebookexternalhit is for Facebook crawler
+     * - MetaInspector is for https://metatags.io/
+     */
+    return /bot|facebookexternalhit|google|baidu|bing|msn|duckduckbot|teoma|slurp|yandex|MetaInspector/i.test(ua);
   }
   return false;
 };

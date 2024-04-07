@@ -1,11 +1,14 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 
+import { changeDomainForLinks } from '@/lib/api/links';
 import { withProjectAuth } from '@/lib/auth';
 import prisma from '@/lib/prisma';
-import { changeDomain } from '@/lib/redis';
 import { validDomainRegex } from '@/lib/utils';
 
-export default withProjectAuth(async (req: NextApiRequest, res: NextApiResponse, project) => {
+export default withProjectAuth(async (req: NextApiRequest, res: NextApiResponse, project, session) => {
+  if (!session?.user?.superadmin && !['manager', 'owner'].includes(project.users[0]?.role))
+    return res.status(403).send({ error: 'Missing permissions' });
+
   if (req.method === 'PUT') {
     const { slug } = req.query as { slug: string };
     const domain = project.domain;
@@ -23,13 +26,12 @@ export default withProjectAuth(async (req: NextApiRequest, res: NextApiResponse,
         where: {
           domain: newDomain
         },
-        select: { slug: true }
+        select: { id: true, domain: true, slug: true }
       });
       if (project && project.slug !== slug) {
         return res.status(400).json({ error: 'Domain already exists' });
       }
-      const [upstashResponse, prismaResponse] = await Promise.all([
-        changeDomain(domain, newDomain),
+      const [redisResponse, prismaResponse] = await Promise.all([
         prisma.project.update({
           where: {
             slug
@@ -37,11 +39,12 @@ export default withProjectAuth(async (req: NextApiRequest, res: NextApiResponse,
           data: {
             domain: newDomain
           }
-        })
+        }),
+        changeDomainForLinks(project.id, domain, newDomain)
       ]);
 
       return res.status(200).json({
-        upstashResponse,
+        redisResponse,
         prismaResponse
       });
     }
